@@ -136,8 +136,8 @@ class CornerHomingManager(object):
         y_indices = [idx for (idx, angle) in zip(indices, angles)
                      if self.y_scan_min <= angle <= self.y_scan_max]
 
-        self.x_scan_indices = (x_scan_indices[0], x_scan_indices[-1])
-        self.y_scan_indices = (y_scan_indices[0], y_scan_indices[-1])
+        self.x_scan_indices = (x_indices[0], x_indices[-1])
+        self.y_scan_indices = (y_indices[0], y_indices[-1])
         self.angles = angles
 
     def __get_distances(self, laser_scan_msg):
