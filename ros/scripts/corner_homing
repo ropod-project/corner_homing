@@ -46,10 +46,14 @@ class CornerHomingManager(object):
         trans = None
         rot = None
         try:
+            rospy.loginfo('Waiting for transform from {0} to {1}'.format(base_link_frame_name,
+                                                                         laser_frame_name))
             tf_listener.waitForTransform(base_link_frame_name,
                                          laser_frame_name,
-                                         rospy.Time.now(),
-                                         rospy.Duration(30))
+                                         rospy.Time(0),
+                                         rospy.Duration(5))
+            rospy.loginfo('Reading transform from {0} to {1}'.format(base_link_frame_name,
+                                                                     laser_frame_name))
             (trans, rot) = tf_listener.lookupTransform(base_link_frame_name,
                                                        laser_frame_name,
                                                        rospy.Time(0))
