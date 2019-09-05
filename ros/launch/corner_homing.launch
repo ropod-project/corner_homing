@@ -7,16 +7,16 @@
         <param name="laser_frame_name" type="str" value="/rslidar_projected_back"/>
 
         <param name="homing_server_name" type="str" value="/go_to_corner"/>
-        <param name="max_linear_vel_ms" type="double" value="0.3" />
+        <param name="max_linear_vel_ms" type="double" value="0.15" />
         <param name="max_angular_vel_rads" type="double" value="0.2" />
 
-        <param name="x_scan_min" type="double" value="-0.15" />
-        <param name="x_scan_max" type="double" value="0.15" />
-        <param name="y_scan_min" type="double" value="1.15" />
-        <param name="y_scan_max" type="double" value="1.3" />
+        <param name="x_scan_min" type="double" value="-0.1" />
+        <param name="x_scan_max" type="double" value="0.1" />
+        <param name="y_scan_min" type="double" value="-1.57" />
+        <param name="y_scan_max" type="double" value="-1.35" />
 
-        <param name="x_desired_dist" type="double" value="0.2" />
-        <param name="y_desired_dist" type="double" value="0.2" />
+        <param name="x_desired_dist" type="double" value="0.1" />
+        <param name="y_desired_dist" type="double" value="0.1" />
         <param name="rotational_alignment_threshold" type="double" value="0.05" />
     </node>
 </launch>
