@@ -94,6 +94,7 @@ class CornerHomingManager(object):
             else:
                 self.twist_msg.angular.z = np.sign(angle_line_x_axis) * self.max_angular_vel_rads
             self.cmd_vel_pub.publish(self.twist_msg)
+            rospy.sleep(0.05)
 
         homing_done = False
         while not homing_done:
@@ -112,6 +113,7 @@ class CornerHomingManager(object):
                 if avg_y_distance > self.y_desired_dist:
                     self.twist_msg.linear.y = self.max_linear_vel_ms
             self.cmd_vel_pub.publish(self.twist_msg)
+            rospy.sleep(0.05)
 
         self.homing_action_server.set_succeeded(CornerHomingResult(success=True))
 
@@ -154,9 +156,9 @@ class CornerHomingManager(object):
                          for (dist, angle) in zip(distances, angles)])
 
     def __fit_line(self, points):
-        A = np.hstack((points[:,0][np.newaxis].T,
+        A = np.hstack((points[0][np.newaxis].T,
                        np.ones(points.shape[1])[np.newaxis].T))
-        line_params = np.linalg.pinv(points).dot(points[:,1][np.newaxis].T)
+        line_params = np.linalg.pinv(A).dot(points[1][np.newaxis].T)
         return line_params
 
 if __name__ == '__main__':
