@@ -64,6 +64,7 @@ class CornerHomingManager(object):
 
         self.T_base_laser = self.__get_transformation_matrix(trans, rot)
         self.homing_action_server.start()
+        self.component_running = True
 
     def perform_homing(self, action_request):
         if not self.scan_indices_initialised:
@@ -72,7 +73,7 @@ class CornerHomingManager(object):
             return
 
         aligned = False
-        while not aligned:
+        while not aligned and self.component_running:
             x_distances, y_distances = self.__get_distances(self.latest_laser_scan_msg)
             x_positions = self.__get_positions(x_distances, self.angles[self.x_scan_indices[0]:self.x_scan_indices[1]+1])
             y_positions = self.__get_positions(y_distances, self.angles[self.y_scan_indices[0]:self.y_scan_indices[1]+1])
@@ -97,7 +98,7 @@ class CornerHomingManager(object):
             rospy.sleep(0.05)
 
         homing_done = False
-        while not homing_done:
+        while not homing_done and self.component_running:
             x_distances, y_distances = self.__get_distances(self.latest_laser_scan_msg)
             avg_x_distance = np.mean(x_distances)
             avg_y_distance = np.mean(y_distances)
@@ -115,7 +116,10 @@ class CornerHomingManager(object):
             self.cmd_vel_pub.publish(self.twist_msg)
             rospy.sleep(0.05)
 
-        self.homing_action_server.set_succeeded(CornerHomingResult(success=True))
+        if self.component_running:
+            self.homing_action_server.set_succeeded(CornerHomingResult(success=True))
+        else:
+            self.homing_action_server.set_aborted(CornerHomingResult(success=False))
 
     def __get_transformation_matrix(self, trans, rot):
         euler_rot = tf.transformations.euler_from_quaternion(rot)
@@ -163,5 +167,10 @@ class CornerHomingManager(object):
 
 if __name__ == '__main__':
     rospy.init_node('corner_homing')
-    CornerHomingManager()
-    rospy.spin()
+    corner_homing_manager = CornerHomingManager()
+    try:
+        while not rospy.is_shutdown():
+            rospy.sleep(0.1)
+    except:
+        corner_homing_manager.component_running = False
+        rospy.loginfo('Corner homing stopped')
