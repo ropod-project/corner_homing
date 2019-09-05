@@ -11,15 +11,17 @@ from corner_homing.msg import CornerHomingAction, CornerHomingResult
 
 class CornerHomingManager(object):
     def __init__(self):
-        self.x_scan_min = rospy.get_param('~x_scan_min', -0.15)
-        self.x_scan_max = rospy.get_param('~x_scan_max', 0.15)
-        self.y_scan_min = rospy.get_param('~y_scan_min', 1.15)
-        self.y_scan_max = rospy.get_param('~y_scan_max', 1.3)
-        self.x_desired_dist = rospy.get_param('~x_desired_dist', 0.2)
-        self.y_desired_dist = rospy.get_param('~y_desired_dist', 0.2)
+        self.x_scan_min = rospy.get_param('~x_scan_min', -0.1)
+        self.x_scan_max = rospy.get_param('~x_scan_max', 0.1)
+        self.y_scan_min = rospy.get_param('~y_scan_min', -1.57)
+        self.y_scan_max = rospy.get_param('~y_scan_max', -1.35)
+        self.x_desired_dist = rospy.get_param('~x_desired_dist', 0.1)
+        self.y_desired_dist = rospy.get_param('~y_desired_dist', 0.1)
         self.rotational_alignment_threshold = rospy.get_param('~rotational_alignment_threshold', 0.05)
         self.max_linear_vel_ms = rospy.get_param('~max_linear_vel_ms', 0.1)
         self.max_angular_vel_rads = rospy.get_param('~max_angular_vel_rads', 0.1)
+        self.laser_center_offset = rospy.get_param('~laser_center_offset', 0.5)
+        self.blind_spot_dist_threshold = rospy.get_param('~blind_spot_dist_threshold', 50.0)
 
         homing_server_name = rospy.get_param('~homing_server_name', '/go_to_corner')
         self.homing_action_server = actionlib.SimpleActionServer(homing_server_name,
@@ -73,6 +75,7 @@ class CornerHomingManager(object):
             return
 
         aligned = False
+        rospy.loginfo('Performing rotational alignment...')
         while not aligned and self.component_running:
             x_distances, y_distances = self.__get_distances(self.latest_laser_scan_msg)
             x_positions = self.__get_positions(x_distances, self.angles[self.x_scan_indices[0]:self.x_scan_indices[1]+1])
@@ -98,27 +101,38 @@ class CornerHomingManager(object):
             rospy.sleep(0.05)
 
         homing_done = False
+        rospy.loginfo('Moving closer to corner...')
         while not homing_done and self.component_running:
             x_distances, y_distances = self.__get_distances(self.latest_laser_scan_msg)
-            avg_x_distance = np.mean(x_distances)
-            avg_y_distance = np.mean(y_distances)
+            avg_x_distance = np.median(x_distances) - self.laser_center_offset
+            avg_y_distance = np.median(y_distances) - self.laser_center_offset
 
-            homing_done = avg_x_distance < self.x_desired_dist and avg_y_distance < self.y_desired_dist
+            homing_done = (avg_x_distance < self.x_desired_dist or avg_x_distance > self.blind_spot_dist_threshold) and \
+                          (avg_y_distance < self.y_desired_dist or avg_y_distance > self.blind_spot_dist_threshold)
             if homing_done:
                 self.twist_msg.linear.x = 0.
                 self.twist_msg.linear.y = 0.
             else:
-                if avg_x_distance > self.x_desired_dist:
-                    self.twist_msg.linear.x = self.max_linear_vel_ms
+                if avg_x_distance > self.x_desired_dist and avg_x_distance < self.blind_spot_dist_threshold:
+                    # negative sign because we want the robot to move to the back
+                    self.twist_msg.linear.x = -self.max_linear_vel_ms
+                else:
+                    self.twist_msg.linear.x = 0.
 
-                if avg_y_distance > self.y_desired_dist:
+                if avg_y_distance > self.y_desired_dist and avg_y_distance < self.blind_spot_dist_threshold:
+                    # C022 lab hack - the corner is on the left side of the robot,
+                    # so we move in the positive y direction
                     self.twist_msg.linear.y = self.max_linear_vel_ms
+                else:
+                    self.twist_msg.linear.y = 0.
             self.cmd_vel_pub.publish(self.twist_msg)
             rospy.sleep(0.05)
 
         if self.component_running:
+            rospy.loginfo('Successfully performed corner homing')
             self.homing_action_server.set_succeeded(CornerHomingResult(success=True))
         else:
+            rospy.loginfo('Corner homing unsuccessful')
             self.homing_action_server.set_aborted(CornerHomingResult(success=False))
 
     def __get_transformation_matrix(self, trans, rot):
@@ -171,6 +185,7 @@ if __name__ == '__main__':
     try:
         while not rospy.is_shutdown():
             rospy.sleep(0.1)
-    except:
-        corner_homing_manager.component_running = False
-        rospy.loginfo('Corner homing stopped')
+    except Exception as exc:
+        rospy.logerr(str(exc))
+    rospy.loginfo('Corner homing stopped')
+    corner_homing_manager.component_running = False

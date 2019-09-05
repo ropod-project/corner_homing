@@ -9,6 +9,8 @@
         <param name="homing_server_name" type="str" value="/go_to_corner"/>
         <param name="max_linear_vel_ms" type="double" value="0.15" />
         <param name="max_angular_vel_rads" type="double" value="0.2" />
+        <param name="laser_center_offset" type="double" value="0.5" />
+        <param name="blind_spot_dist_threshold" type="double" value="50.0" />
 
         <param name="x_scan_min" type="double" value="-0.1" />
         <param name="x_scan_max" type="double" value="0.1" />
