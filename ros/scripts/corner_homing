@@ -1,0 +1,161 @@
+#!/usr/bin/env python
+import numpy as np
+
+import rospy
+import actionlib
+import tf
+from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import Twist
+
+from corner_homing.msg import CornerHomingAction, CornerHomingResult
+
+class CornerHomingManager(object):
+    def __init__(self):
+        self.x_scan_min = rospy.get_param('~x_scan_min', -0.15)
+        self.x_scan_max = rospy.get_param('~x_scan_min', 0.15)
+        self.y_scan_min = rospy.get_param('~y_scan_min', 1.15)
+        self.y_scan_max = rospy.get_param('~y_scan_min', 1.3)
+        self.x_desired_dist = rospy.get_param('~x_desired_dist', 0.2)
+        self.y_desired_dist = rospy.get_param('~y_desired_dist', 0.2)
+        self.rotational_alignment_threshold = rospy.get_param('~rotational_alignment_threshold', 0.05)
+        self.max_linear_vel_ms = rospy.get_param('~max_linear_vel_ms', 0.1)
+        self.max_angular_vel_rads = rospy.get_param('~max_angular_vel_rads', 0.1)
+
+        homing_server_name = rospy.get_param('~homing_server_name', '/go_to_corner')
+        self.homing_action_server = actionlib.SimpleActionServer(homing_server_name,
+                                                                 CornerHomingAction,
+                                                                 self.perform_homing,
+                                                                 False)
+
+        laser_topic = rospy.get_param('~laser_topic', '/laser/scan')
+        cmd_vel_topic = rospy.get_param('~cmd_vel_topic', '/ropod/cmd_vel')
+        base_link_frame_name = rospy.get_param('~base_link_frame_name', '/ropod/base_link')
+        laser_frame_name = rospy.get_param('~laser_frame_name', '/rslidar_projected_back')
+
+        self.laser_scan_sub = rospy.Subscriber(laser_topic, LaserScan, self.__register_laser_msg)
+        self.cmd_vel_pub = rospy.Publisher(cmd_vel_topic, Twist, queue_size=1)
+        self.homing_action_server.start()
+
+        self.latest_laser_scan_msg = None
+        self.x_scan_indices = (-1, -1)
+        self.y_scan_indices = (-1, -1)
+        self.scan_indices_initialised = False
+        self.twist_msg = Twist()
+
+        tf_listener = tf.TransformListener()
+        trans = None
+        rot = None
+        try:
+            tf_listener.waitForTransform(base_link_frame_name,
+                                         laser_frame_name,
+                                         rospy.Time.now(),
+                                         rospy.Duration(30))
+            (trans, rot) = tf_listener.lookupTransform(base_link_frame_name,
+                                                       laser_frame_name,
+                                                       rospy.Time(0))
+        except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
+            rospy.logerr('Could not get transform between {0} and {1}'.format(base_link_frame_name,
+                                                                              laser_frame_name))
+            raise
+
+        self.T_base_laser = self.__get_transformation_matrix(trans, rot)
+        self.homing_action_server.start()
+
+    def perform_homing(self, action_request):
+        if not self.scan_indices_initialised:
+            rospy.logerr('No scans have been received yet; aborting request')
+            self.homing_action_server.set_aborted(CornerHomingResult(success=False))
+            return
+
+        aligned = False
+        while not aligned:
+            x_distances, y_distances = self.__get_distances(self.latest_laser_scan_msg)
+            x_positions = self.__get_positions(x_distances, self.angles[self.x_scan_indices[0]:self.x_scan_indices[1]+1])
+            y_positions = self.__get_positions(y_distances, self.angles[self.y_scan_indices[0]:self.y_scan_indices[1]+1])
+
+            # we get the positions of the points as row vectors;
+            # we thus transform the points before transforming them
+            # to the base link frame
+            y_positions_base_link = self.T_base_laser.dot(y_positions.T)
+            scan_line_params = self.__fit_line(y_positions_base_link)
+            line_slope = scan_line_params[0]
+            angle_line_x_axis = np.arctan(line_slope)
+
+            # if the robot is already aligned with the wall, we stop the
+            # rotational motion; otherwise, we send a motion command
+            # to decrease the alignment error
+            aligned = np.abs(angle_line_x_axis) < self.rotational_alignment_threshold
+            if aligned:
+                self.twist_msg.angular.z = 0.
+            else:
+                self.twist_msg.angular.z = np.sign(angle_line_x_axis) * self.max_angular_vel_rads
+            self.cmd_vel_pub.publish(self.twist_msg)
+
+        homing_done = False
+        while not homing_done:
+            x_distances, y_distances = self.__get_distances(self.latest_laser_scan_msg)
+            avg_x_distance = np.mean(x_distances)
+            avg_y_distance = np.mean(y_distances)
+
+            homing_done = avg_x_distance < self.x_desired_dist and avg_y_distance < self.y_desired_dist
+            if homing_done:
+                self.twist_msg.linear.x = 0.
+                self.twist_msg.linear.y = 0.
+            else:
+                if avg_x_distance > self.x_desired_dist:
+                    self.twist_msg.linear.x = self.max_linear_vel_ms
+
+                if avg_y_distance > self.y_desired_dist:
+                    self.twist_msg.linear.y = self.max_linear_vel_ms
+            self.cmd_vel_pub.publish(self.twist_msg)
+
+        self.homing_action_server.set_succeeded(CornerHomingResult(success=True))
+
+    def __get_transformation_matrix(self, trans, rot):
+        euler_rot = tf.transformations.euler_from_quaternion(rot)
+        yaw = euler_rot[2]
+        T = np.array([[np.cos(yaw), -np.sin(yaw), trans[0]],
+                      [np.sin(yaw),  np.cos(yaw), trans[1]],
+                      [0., 0., 1.]])
+        return T
+
+    def __register_laser_msg(self, laser_scan_msg):
+        self.latest_laser_scan_msg = laser_scan_msg
+        if not self.scan_indices_initialised:
+            self.__extract_laser_measurement_indices_and_angles(laser_scan_msg)
+            self.scan_indices_initialised = True
+
+    def __extract_laser_measurement_indices_and_angles(self, laser_scan_msg):
+        indices = list(range(0, len(laser_scan_msg.ranges)))
+        angles = np.arange(laser_scan_msg.angle_min,
+                           laser_scan_msg.angle_max,
+                           laser_scan_msg.angle_increment)
+
+        x_indices = [idx for (idx, angle) in zip(indices, angles)
+                     if self.x_scan_min <= angle <= self.x_scan_max]
+        y_indices = [idx for (idx, angle) in zip(indices, angles)
+                     if self.y_scan_min <= angle <= self.y_scan_max]
+
+        self.x_scan_indices = (x_scan_indices[0], x_scan_indices[-1])
+        self.y_scan_indices = (y_scan_indices[0], y_scan_indices[-1])
+        self.angles = angles
+
+    def __get_distances(self, laser_scan_msg):
+        x_distances = laser_scan_msg.ranges[self.x_scan_indices[0]:self.x_scan_indices[1]+1]
+        y_distances = laser_scan_msg.ranges[self.y_scan_indices[0]:self.y_scan_indices[1]+1]
+        return x_distances, y_distances
+
+    def __get_positions(self, distances, angles):
+        return np.array([[dist*np.cos(angle), dist*np.sin(angle), 1.]
+                         for (dist, angle) in zip(distances, angles)])
+
+    def __fit_line(self, points):
+        A = np.hstack((points[:,0][np.newaxis].T,
+                       np.ones(points.shape[1])[np.newaxis].T))
+        line_params = np.linalg.pinv(points).dot(points[:,1][np.newaxis].T)
+        return line_params
+
+if __name__ == '__main__':
+    rospy.init_node('corner_homing')
+    CornerHomingManager()
+    rospy.spin()
